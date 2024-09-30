@@ -1,11 +1,12 @@
 import tkinter as tk
-from tkinter import scrolledtext
+from tkinter import scrolledtext, messagebox
 import pyautogui
 import cv2
 import numpy as np
 import pytesseract
 import keyboard
-from PIL import ImageGrab
+from PIL import Image, ImageTk
+import time
 
 pytesseract.pytesseract.tesseract_cmd = r'C:\Users\gyan.monteiro\AppData\Local\Programs\Tesseract-OCR\tesseract.exe'
 
@@ -18,49 +19,71 @@ class BotApp:
         self.text_area = scrolledtext.ScrolledText(root, width=40, height=10)
         self.text_area.pack()
 
-        # Lista de inimigos e suas variáveis de seleção
-        self.enemies = ["isilla.png", "inimigo2.png", "inimigo3.png", "inimigo4.png", "inimigo5.png"]
-        self.check_vars = [tk.IntVar() for _ in self.enemies]  # Variáveis para os checkboxes
+        # Lista de inimigos com seus nomes e imagens
+        self.enemies = [
+            {"name": "Isilla", "image": "isilla.png"},
+            {"name": "Hodremlin", "image": "hodremlin.png"},
+            {"name": "Vanberk", "image": "vanberk.png"},
+            {"name": "Majoruros", "image": "majoruros.png"},
+            {"name": "Les", "image": "les.png"}
+        ]
 
-        # Criação dos checkboxes
-        for i, enemy in enumerate(self.enemies):
-            cb = tk.Checkbutton(root, text=enemy, variable=self.check_vars[i])
-            cb.pack(anchor='w')
+        # Frame para organizar os inimigos
+        enemy_frame = tk.Frame(root)
+        enemy_frame.pack()
 
-        # Campo de entrada para a tecla de ataque
+        self.check_vars = {}
+        self.enemy_buttons = {}
+
+        for enemy in self.enemies:
+            # Frame individual para cada inimigo (botão + imagem)
+            frame = tk.Frame(enemy_frame)
+            frame.pack(side=tk.LEFT, padx=10)
+
+            # Variável de checkbox
+            var = tk.IntVar()
+            checkbox = tk.Checkbutton(frame, text=enemy["name"], variable=var)
+            checkbox.pack()
+
+            # Carregar a imagem do inimigo
+            img = Image.open(enemy["image"]).resize((50, 50))
+            img = ImageTk.PhotoImage(img)
+            label = tk.Label(frame, image=img)
+            label.image = img  # Manter a referência da imagem
+            label.pack()
+
+            # Armazenar checkbox e variável associada
+            self.check_vars[enemy["name"]] = var
+            self.enemy_buttons[enemy["name"]] = checkbox
+
+        # Campos e botões para capturar as teclas de ataque e teletransporte
         self.attack_key_label = tk.Label(root, text="Tecla de Ataque:")
         self.attack_key_label.pack()
         self.attack_key_entry = tk.Entry(root)
         self.attack_key_entry.pack()
 
-        # Mensagem para exibir a tecla de ataque
-        self.attack_key_message = tk.Label(root, text="")
-        self.attack_key_message.pack()
-
-        # Botão para capturar a tecla de ataque
-        self.capture_attack_key_button = tk.Button(root, text="Capturar Tecla de Ataque", command=self.capture_attack_key)
-        self.capture_attack_key_button.pack()
-
-        # Campo de entrada para a tecla de teletransporte
         self.teleport_key_label = tk.Label(root, text="Tecla de Teletransporte:")
         self.teleport_key_label.pack()
         self.teleport_key_entry = tk.Entry(root)
         self.teleport_key_entry.pack()
 
-        # Mensagem para exibir a tecla de teletransporte
-        self.teleport_key_message = tk.Label(root, text="")
-        self.teleport_key_message.pack()
+        self.capture_attack_key_button = tk.Button(root, text="Capturar Tecla de Ataque", command=self.capture_attack_key)
+        self.capture_attack_key_button.pack()
 
-        # Botão para capturar a tecla de teletransporte
         self.capture_teleport_key_button = tk.Button(root, text="Capturar Tecla de Teletransporte", command=self.capture_teleport_key)
         self.capture_teleport_key_button.pack()
 
-        # Botão para iniciar o bot
+        # Botões
         self.start_button = tk.Button(root, text="Iniciar", command=self.run_bot)
         self.start_button.pack()
 
         self.stop_key_button = tk.Button(root, text="Definir Tecla de Parada", command=self.get_stop_key)
         self.stop_key_button.pack()
+
+        # Variáveis para armazenar as teclas
+        self.attack_key = None
+        self.teleport_key = None
+        self.stop_key = None
 
         # Variável para controlar o loop do bot
         self.running = True
@@ -76,96 +99,90 @@ class BotApp:
         self.log_action("Bot parado.")
 
     def find_enemy(self, template_path):
-        """Função para identificar o inimigo na tela"""
-        screenshot = np.array(pyautogui.screenshot())  # Usa pyautogui para capturar a tela
+        """Função para identificar o inimigo na tela, ajustando para diferentes tamanhos"""
+        screenshot = np.array(pyautogui.screenshot())  # Captura a tela usando pyautogui
         screenshot_gray = cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
-        template = cv2.imread(template_path, 0)
-        result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_CCOEFF_NORMED)
-        threshold = 0.8
-        loc = np.where(result >= threshold)
 
-        if loc[0].size > 0:
-            # Retorna a posição média do inimigo encontrado
-            y, x = loc[0][0], loc[1][0]
-            return (x, y)  # Retorna as coordenadas (x, y) do inimigo
-        return None  # Retorna None se o inimigo não for encontrado
+        # Carrega a imagem do template (inimigo ou captcha)
+        template = cv2.imread(template_path, 0)
+        template_height, template_width = template.shape[:2]
+
+        # Inicializa a variável para armazenar o melhor resultado
+        best_match = None
+        best_val = 0
+
+        # Faz a varredura em múltiplas escalas
+        for scale in np.linspace(0.5, 1.5, 20):  # Escalas entre 50% e 150% do tamanho original
+            resized_template = cv2.resize(template, (int(template_width * scale), int(template_height * scale)))
+
+            # Ignora escalas que resultam em templates maiores que a imagem
+            if resized_template.shape[0] > screenshot_gray.shape[0] or resized_template.shape[1] > screenshot_gray.shape[1]:
+                continue
+
+            # Faz a correspondência do template
+            result = cv2.matchTemplate(screenshot_gray, resized_template, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+
+            # Mantém o melhor resultado
+            if max_val > best_val:
+                best_val = max_val
+                best_match = (max_loc, scale)
+
+        if best_val >= 0.7:  # Define um threshold para correspondência
+            self.log_action(f"Correspondência encontrada no template {template_path} com valor de confiança {best_val}.")
+            return best_match[0]  # Retorna a posição do melhor match
+        else:
+            self.log_action(f"Nenhuma correspondência confiável encontrada para o template {template_path}.")
+            return None
 
     def attack_enemy(self, enemy_position=None):
-        """Simula o ataque e teleportação do mouse para o inimigo"""
+        """Simula o ataque e teletransporte do mouse para o inimigo"""
         self.log_action("Ataque iniciado.")
-        
-        # Obtém a tecla de ataque a partir do campo de entrada
-        attack_key = self.attack_key_entry.get() or 'space'  # Default para 'space' se vazio
+        attack_key = self.attack_key or 'space'
         pyautogui.press(attack_key)
 
-        # Se a posição do inimigo for fornecida, move o mouse para lá instantaneamente
         if enemy_position:
             x, y = enemy_position
             self.log_action(f"Teleportando o mouse para a posição do inimigo em ({x}, {y}).")
-            
-            # Teleporta o mouse para a posição do inimigo instantaneamente
-            pyautogui.moveTo(x, y, duration=0)  # Duração de 0 para movimento instantâneo
-            pyautogui.click()  # Simula um clique no inimigo
-        else:
-            self.log_action("Posição do inimigo não encontrada.")
-
-    def use_teleport(self):
-        """Usa o item de teletransporte"""
-        self.log_action("Usando teletransporte.")
-        
-        # Obtém a tecla de teletransporte a partir do campo de entrada
-        teleport_key = self.teleport_key_entry.get() or 'f1'  # Default para 'f1' se vazio
-        pyautogui.press(teleport_key)  # Simula a tecla de teletransporte
-
-    def check_for_verification(self):
-        """Verifica a presença de mensagens de verificação"""
-        screenshot = pyautogui.screenshot()
-        text = pytesseract.image_to_string(screenshot)
-        if "verificação" in text or "sala de teste" in text:
-            self.log_action("Verificação detectada. Parando o bot.")
-            self.stop_bot()
-            return True
-        return False
+            pyautogui.moveTo(x, y, duration=0)  # Move o mouse instantaneamente
+            pyautogui.click()
 
     def capture_attack_key(self):
         """Captura a tecla de ataque pressionada"""
         self.log_action("Pressione a tecla para atacar...")
-        self.attack_key_message.config(text="Pressione a tecla para atacar...")  # Mensagem de captura
         self.root.after(100, self.get_attack_key)
 
     def get_attack_key(self):
-        """Obtém a tecla pressionada"""
-        # Verifica se houve uma tecla pressionada
+        """Obtém a tecla de ataque"""
         if keyboard.read_event().event_type == keyboard.KEY_DOWN:
             key = keyboard.read_event().name
             self.attack_key_entry.delete(0, tk.END)  # Limpa o campo
             self.attack_key_entry.insert(0, key)  # Insere a tecla pressionada
-            self.attack_key_message.config(text=f"Tecla definida como: {key}")  # Atualiza a mensagem
+            self.attack_key = key
             self.log_action(f"Tecla de Ataque capturada: {key}")
-            return  # Retorna após capturar a tecla
+            return  # Capturou a tecla, então sai da função
 
         self.root.after(100, self.get_attack_key)  # Continua verificando
 
     def capture_teleport_key(self):
         """Captura a tecla de teletransporte pressionada"""
         self.log_action("Pressione a tecla para teletransportar...")
-        self.teleport_key_message.config(text="Pressione a tecla para teletransportar...")  # Mensagem de captura
         self.root.after(100, self.get_teleport_key)
 
     def get_teleport_key(self):
-        """Obtém a tecla pressionada"""
-        # Verifica se houve uma tecla pressionada
+        """Obtém a tecla de teletransporte"""
         if keyboard.read_event().event_type == keyboard.KEY_DOWN:
             key = keyboard.read_event().name
             self.teleport_key_entry.delete(0, tk.END)  # Limpa o campo
             self.teleport_key_entry.insert(0, key)  # Insere a tecla pressionada
-            self.teleport_key_message.config(text=f"Tecla definida como: {key}")  # Atualiza a mensagem
+            self.teleport_key = key
             self.log_action(f"Tecla de Teletransporte capturada: {key}")
-            return  # Retorna após capturar a tecla
+            return  # Capturou a tecla, então sai da função
 
         self.root.after(100, self.get_teleport_key)  # Continua verificando
 
     def get_stop_key(self):
+        """Captura a tecla para parar o bot"""
         self.log_action("Pressione a tecla para parar o bot...")
         while True:
             event = keyboard.read_event()
@@ -174,33 +191,87 @@ class BotApp:
                 self.log_action(f"Tecla de parada definida como: {self.stop_key}")
                 break
 
+    def check_for_verification(self):
+        """Verifica a presença de mensagens de verificação ou CAPTCHA"""
+        screenshot = pyautogui.screenshot()
+        text = pytesseract.image_to_string(screenshot)
+        if "checagem" in text or "automatica" in text or "anti-bot" in text:
+            self.log_action("Verificação/CAPTCHA detectado! Parando o bot.")
+            self.stop_bot()
+            self.alert_verification()  # Exibe o alerta de CAPTCHA
+            return True
+        return False
+
+    def alert_verification(self):
+        """Mostra um alerta visual quando o CAPTCHA é detectado"""
+        messagebox.showwarning("CAPTCHA Detectado", "O CAPTCHA foi detectado! O bot foi interrompido.")
+
+    def use_teleport(self):
+        """Simula o uso da habilidade de teletransporte"""
+        if self.teleport_key:
+            pyautogui.press(self.teleport_key)
+            self.log_action(f"Usando teletransporte com a tecla {self.teleport_key}.")
+            time.sleep(1)  # Espera 2 segundos após o uso do teletransporte
+
     def run_bot(self):
-        """Loop principal do bot"""
+        """Inicia o loop principal do bot sem bloquear a interface"""
         self.running = True
         self.log_action("Bot iniciado.")
-        while self.running:
-            if self.check_for_verification():
-                break
+        self.bot_loop()
 
-            # Verifica se a tecla de parada foi pressionada
-            if self.stop_key and keyboard.is_pressed(self.stop_key):
-                self.log_action("Tecla de parada pressionada. Parando o bot.")
-                self.stop_bot()
-                break
+    def bot_loop(self):
+        """Loop principal do bot usando after para não bloquear a interface"""
+        if not self.running:
+            return
 
-            self.log_action("Varredura iniciada.")
-            enemy_position = self.find_enemy('isilla.png')
+        # Verifica o CAPTCHA logo no início do loop
+        if self.check_for_verification():
+            self.log_action("Captcha detectado! Bot parado.")
+            self.stop_bot()
+            return
 
-            if enemy_position:
-                self.log_action("Inimigo encontrado.")
-                self.attack_enemy(enemy_position)
-                self.use_teleport()
+        # Verifica se a tecla de parada foi pressionada
+        if self.stop_key and keyboard.is_pressed(self.stop_key):
+            self.log_action("Tecla de parada pressionada. Parando o bot.")
+            self.stop_bot()
+            return
+
+        self.log_action("Varredura iniciada.")
+
+        # Itera sobre todos os inimigos e verifica se estão selecionados
+        for enemy in self.enemies:
+            if self.check_vars[enemy["name"]].get():  # Se o checkbox estiver marcado
+                self.log_action(f"Procurando por {enemy['name']}...")
+                enemy_position = self.find_enemy(enemy["image"])  # Usa a imagem do inimigo selecionado
+
+                if enemy_position:
+                    self.log_action(f"Inimigo {enemy['name']} encontrado.")
+                    self.attack_enemy(enemy_position)
+
+                    # Verificação de CAPTCHA após atacar o inimigo
+                    if self.check_for_verification():
+                        self.log_action("Captcha detectado após ataque! Bot parado.")
+                        self.stop_bot()
+                        return
+
+                    self.use_teleport()  # Usa teleporte com atraso e verificação
+                    break  # Para o loop ao encontrar um inimigo
             else:
-                self.log_action("Inimigo não encontrado.")
+                self.log_action(f"{enemy['name']} não selecionado. Pulando...")
 
-            self.root.update()  # Atualiza a interface
+        else:
+            self.log_action("Nenhum inimigo encontrado nesta varredura.")
 
+        # Verifica o CAPTCHA ao final da varredura
+        if self.check_for_verification():
+            self.log_action("Captcha detectado após varredura! Bot parado.")
+            self.stop_bot()
+            return
 
+        # Reagenda o próximo loop após 100ms
+        self.root.after(100, self.bot_loop)
+
+# Execução do programa
 if __name__ == "__main__":
     root = tk.Tk()
     app = BotApp(root)
